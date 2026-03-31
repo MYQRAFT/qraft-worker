@@ -13,7 +13,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const GEMINI_TIMEOUT_MS = 390_000;
+const GEMINI_TIMEOUT_MS = 900_000;
 
 // ===== PROMPTS =====
 const PERSONA_ANCHOR = `POINT OF VIEW: Write as the accountable owner of this account. Use assertive, experience-backed statements — not neutral observations. You are the strategist who owns the outcome, not a spectator summarizing from the sidelines. Say "I drove," "We committed," "This quarter exposed" — never "It was observed that."`;
@@ -208,7 +208,7 @@ app.post("/", async (req, res) => {
   try {
     const { data: job, error: fetchError } = await supabase.from("pptx_jobs").select("*").eq("id", jobId).single();
     if (fetchError || !job) {
-      console.error("Job not found:", jobId);
+      console.error("Database rejection for Job", jobId, "Error:", fetchError);
       return;
     }
     if (job.status !== "pending" && job.status !== "stalled") {
