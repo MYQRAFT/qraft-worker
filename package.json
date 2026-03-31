@@ -2,9 +2,12 @@
   "name": "qraft-worker",
   "version": "1.0.0",
   "main": "index.js",
-  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
-    "@supabase/supabase-js": "^2.0.0",
-    "node-fetch": "^3.3.2"
+    "@supabase/supabase-js": "^2.39.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
   }
 }
