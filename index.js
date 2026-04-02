@@ -1,8 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { GoogleAICacheManager } = require('@google/generative-ai/server');
+const Anthropic = require('@anthropic-ai/sdk');
 
 // Initialize Express App
 const app = express();
@@ -14,7 +13,8 @@ app.use(express.json());
 // Environment validation
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const apiKey = process.env.GEMINI_API_KEY;
+const apiKey = process.env.CLAUDE_API_KEY;
+const model = process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
 
 if (!supabaseUrl || !supabaseKey || !apiKey) {
   throw new Error("Missing required environment variables.");
@@ -23,9 +23,8 @@ if (!supabaseUrl || !supabaseKey || !apiKey) {
 // Supabase Setup
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Google AI Setup
-const genAI = new GoogleGenerativeAI(apiKey);
-const cacheManager = new GoogleAICacheManager(apiKey);
+// Claude Setup
+const client = new Anthropic({ apiKey });
 
 // Main Webhook Route
 app.post('/', async (req, res) => {
@@ -37,8 +36,6 @@ app.post('/', async (req, res) => {
 
   // Immediate response
   res.status(200).json({ message: "Job received, engine starting." });
-
-  let cache;
 
   try {
     console.log(`🚀 Starting job: ${jobId}`);
@@ -81,14 +78,10 @@ app.post('/', async (req, res) => {
       throw new Error("No account data payload found in job.");
     }
 
-    console.log(`🧠 Building Context Cache for Job: ${jobId}`);
+    console.log(`🧠 Building context for Claude with prompt caching...`);
 
-    // Create Cache
-    cache = await cacheManager.create({
-      model: 'models/gemini-1.5-pro-002',
-      displayName: `qraft-job-${jobId}`,
-      systemInstruction: `
-You are a Senior Customer Success Manager with 10+ years of enterprise SaaS experience, trained in McKinsey-style executive communication.
+    // Prepare system prompt with cache control
+    const systemPrompt = `You are a Senior Customer Success Manager with 10+ years of enterprise SaaS experience, trained in McKinsey-style executive communication.
 
 Write in a boardroom-ready tone:
 - Insight-driven, not descriptive
@@ -104,50 +97,87 @@ Style:
 Output:
 - Strict markdown
 - No introductions or conclusions
-- No meta commentary
-`,
-      ttlSeconds: 600,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: `ACCOUNT DATA:\n${JSON.stringify(accountDataPayload)}`
-            }
-          ],
-        },
-      ],
-    });
+- No meta commentary`;
 
-    console.log(`✅ Cache created: ${cache.name}`);
-
-    // Bind model to cache
-    const cachedModel = genAI.getGenerativeModelFromCachedContent({
-      cachedContent: cache.name,
-      generationConfig: {
-        temperature: 0.7,
-        topP: 0.9,
-        maxOutputTokens: 8192,
-      },
-    });
-
-    console.log("⚡ Firing parallel generation workers...");
+    const accountDataText = `ACCOUNT DATA:\n${JSON.stringify(accountDataPayload)}`;
 
     // Timeout protection (3 minutes)
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error("AI generation timeout")), 180000)
     );
 
+    console.log("⚡ Firing parallel generation workers with Claude...");
+
     const generationPromise = Promise.allSettled([
-      cachedModel.generateContent(
-        "You are generating part 1 of a 10-slide narrative. Write Sections 1, 2, and 3. Maintain consistency in tone and insight. Output ONLY markdown."
-      ),
-      cachedModel.generateContent(
-        "You are generating part 2 of a 10-slide narrative. Write Sections 4, 5, 6, and 7. Maintain consistency with earlier sections. Output ONLY markdown."
-      ),
-      cachedModel.generateContent(
-        "You are generating part 3 of a 10-slide narrative. Write Sections 8, 9, and 10. Maintain consistency with earlier sections. Output ONLY markdown."
-      )
+      client.messages.create({
+        model: model,
+        max_tokens: 8192,
+        temperature: 0.7,
+        system: [
+          {
+            type: "text",
+            text: systemPrompt,
+            cache_control: { type: "ephemeral" }
+          },
+          {
+            type: "text",
+            text: accountDataText,
+            cache_control: { type: "ephemeral" }
+          }
+        ],
+        messages: [
+          {
+            role: "user",
+            content: "You are generating part 1 of a 10-slide narrative. Write Sections 1, 2, and 3. Maintain consistency in tone and insight. Output ONLY markdown."
+          }
+        ]
+      }),
+      client.messages.create({
+        model: model,
+        max_tokens: 8192,
+        temperature: 0.7,
+        system: [
+          {
+            type: "text",
+            text: systemPrompt,
+            cache_control: { type: "ephemeral" }
+          },
+          {
+            type: "text",
+            text: accountDataText,
+            cache_control: { type: "ephemeral" }
+          }
+        ],
+        messages: [
+          {
+            role: "user",
+            content: "You are generating part 2 of a 10-slide narrative. Write Sections 4, 5, 6, and 7. Maintain consistency with earlier sections. Output ONLY markdown."
+          }
+        ]
+      }),
+      client.messages.create({
+        model: model,
+        max_tokens: 8192,
+        temperature: 0.7,
+        system: [
+          {
+            type: "text",
+            text: systemPrompt,
+            cache_control: { type: "ephemeral" }
+          },
+          {
+            type: "text",
+            text: accountDataText,
+            cache_control: { type: "ephemeral" }
+          }
+        ],
+        messages: [
+          {
+            role: "user",
+            content: "You are generating part 3 of a 10-slide narrative. Write Sections 8, 9, and 10. Maintain consistency with earlier sections. Output ONLY markdown."
+          }
+        ]
+      })
     ]);
 
     const results = await Promise.race([
@@ -160,7 +190,7 @@ Output:
     // Process responses
     const responses = results.map((result, index) => {
       if (result.status === "fulfilled") {
-        return result.value.response.text();
+        return result.value.content[0].text;
       } else {
         console.error(`❌ Section group ${index + 1} failed:`, result.reason);
         return `## Section Group ${index + 1}\nGeneration failed.\n`;
@@ -197,14 +227,6 @@ Output:
         error_message: error.message,
       })
       .eq('id', jobId);
-
-  } finally {
-    // Cleanup cache
-    if (cache && cache.name) {
-      console.log(`🧹 Deleting cache: ${cache.name}`);
-      await cacheManager.delete(cache.name)
-        .catch(e => console.error("Failed to delete cache:", e));
-    }
   }
 });
 
