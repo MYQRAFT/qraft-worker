@@ -11,14 +11,19 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Supabase Setup - Matches your Railway Variable names
+// Environment validation
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY; 
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const apiKey = process.env.GEMINI_API_KEY;
 
+if (!supabaseUrl || !supabaseKey || !apiKey) {
+  throw new Error("Missing required environment variables.");
+}
+
+// Supabase Setup
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Google AI Setup
-const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 const cacheManager = new GoogleAICacheManager(apiKey);
 
@@ -30,7 +35,7 @@ app.post('/', async (req, res) => {
     return res.status(400).json({ error: "No jobId provided" });
   }
 
-  // Immediate response to prevent timeout
+  // Immediate response
   res.status(200).json({ message: "Job received, engine starting." });
 
   let cache;
@@ -38,18 +43,43 @@ app.post('/', async (req, res) => {
   try {
     console.log(`🚀 Starting job: ${jobId}`);
 
-    // Fetch job data
-    const { data: jobData, error: fetchError } = await supabase
-      .from('pptx_jobs')
-      .select('*')
-      .eq('id', jobId)
-      .single();
+    // --- RETRY FETCH LOGIC (SAFE) ---
+    let jobData = null;
+    let retries = 3;
 
-    if (fetchError || !jobData) {
-      throw new Error(`Failed to fetch job data: ${fetchError?.message}`);
+    while (retries > 0 && !jobData) {
+      const { data, error } = await supabase
+        .from('pptx_jobs')
+        .select('*')
+        .eq('id', jobId)
+        .maybeSingle(); // FIXED
+
+      if (data) {
+        jobData = data;
+        console.log(`✅ Job data retrieved for ${jobId}`);
+      } else {
+        console.log(`⚠️ Job not found yet. Retrying in 2s... (${retries} left)`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        retries--;
+      }
     }
 
+    if (!jobData) {
+      throw new Error(`Job not found after retries. ID: ${jobId}`);
+    }
+    // --- END FETCH LOGIC ---
+
+    // Ensure status is processing (safety)
+    await supabase
+      .from('pptx_jobs')
+      .update({ status: 'processing' })
+      .eq('id', jobId);
+
     const accountDataPayload = jobData.account_data || jobData.payload;
+
+    if (!accountDataPayload) {
+      throw new Error("No account data payload found in job.");
+    }
 
     console.log(`🧠 Building Context Cache for Job: ${jobId}`);
 
@@ -89,9 +119,9 @@ Output:
       ],
     });
 
-    console.log(`✅ Cache created: ${cache.name} (TTL: 600s)`);
+    console.log(`✅ Cache created: ${cache.name}`);
 
-    // Bind model to cache (FIXED)
+    // Bind model to cache
     const cachedModel = genAI.getGenerativeModelFromCachedContent({
       cachedContent: cache.name,
       generationConfig: {
@@ -103,8 +133,12 @@ Output:
 
     console.log("⚡ Firing parallel generation workers...");
 
-    // Parallel execution with safety
-    const results = await Promise.allSettled([
+    // Timeout protection (3 minutes)
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("AI generation timeout")), 180000)
+    );
+
+    const generationPromise = Promise.allSettled([
       cachedModel.generateContent(
         "You are generating part 1 of a 10-slide narrative. Write Sections 1, 2, and 3. Maintain consistency in tone and insight. Output ONLY markdown."
       ),
@@ -116,9 +150,14 @@ Output:
       )
     ]);
 
-    console.log("🧩 Parallel execution complete. Processing outputs...");
+    const results = await Promise.race([
+      generationPromise,
+      timeoutPromise
+    ]);
 
-    // Safely extract responses
+    console.log("🧩 Generation complete. Processing outputs...");
+
+    // Process responses
     const responses = results.map((result, index) => {
       if (result.status === "fulfilled") {
         return result.value.response.text();
@@ -146,7 +185,10 @@ Output:
     console.log(`🎉 Job ${jobId} completed successfully`);
 
   } catch (error) {
-    console.error(`🔥 Engine failure for job ${jobId}:`, error);
+    console.error(`🔥 Engine failure for job ${jobId}:`, {
+      message: error.message,
+      stack: error.stack,
+    });
 
     await supabase
       .from('pptx_jobs')
@@ -157,7 +199,7 @@ Output:
       .eq('id', jobId);
 
   } finally {
-    // Cleanup cache to stop billing
+    // Cleanup cache
     if (cache && cache.name) {
       console.log(`🧹 Deleting cache: ${cache.name}`);
       await cacheManager.delete(cache.name)
@@ -168,6 +210,6 @@ Output:
 
 // Start server
 const port = process.env.PORT || 8080;
-app.listen(port, () => {
+app.listen(port, "0.0.0.0", () => {
   console.log(`🚀 Qraft Railway Engine running on port ${port}`);
 });
