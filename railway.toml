@@ -1,6 +1,3 @@
 [build]
 builder = "railpack"
 buildCommand = "npm install"
-git add railway.toml
-git commit -m "Add railway.toml to fix npm install"
-git push
