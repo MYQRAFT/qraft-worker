@@ -85,7 +85,7 @@ app.post('/', async (req, res) => {
 
     // Create Cache
     cache = await cacheManager.create({
-      model: 'models/gemini-1.5-pro',
+      model: 'models/gemini-1.5-pro-002',
       displayName: `qraft-job-${jobId}`,
       systemInstruction: `
 You are a Senior Customer Success Manager with 10+ years of enterprise SaaS experience, trained in McKinsey-style executive communication.
