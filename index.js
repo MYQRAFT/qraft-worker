@@ -11,15 +11,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Supabase Setup
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+// Supabase Setup - Matches your Railway Variable names
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY; 
+
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Google AI Setup
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const cacheManager = new GoogleAICacheManager(process.env.GEMINI_API_KEY);
+const apiKey = process.env.GEMINI_API_KEY;
+const genAI = new GoogleGenerativeAI(apiKey);
+const cacheManager = new GoogleAICacheManager(apiKey);
 
 // Main Webhook Route
 app.post('/', async (req, res) => {
